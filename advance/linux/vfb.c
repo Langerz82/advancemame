@@ -46,6 +46,14 @@
 #define FBIO_WAITFORVSYNC _IOW('F', 0x20, int)
 #endif
 
+#ifndef TARGET_FRAME_PER_SEC_START
+#define TARGET_FRAME_PER_SEC_START TARGET_CLOCKS_PER_SEC / 60
+#endif
+
+//#ifndef TARGET_FRAME_PER_SEC_END
+//#define TARGET_FRAME_PER_SEC_END TARGET_CLOCKS_PER_SEC / 120
+//#endif
+
 #ifdef HAVE_SYS_IOCTL_H
 #include <sys/ioctl.h>
 #endif
@@ -55,6 +63,10 @@
 
 #ifdef USE_VC
 #include "interface/vmcs_host/vc_tvservice.h"
+#endif
+
+#ifdef USE_SMP
+#include <pthread.h>
 #endif
 
 /***************************************************************************/
@@ -105,6 +117,10 @@ typedef struct fb_internal_struct {
 	enum fb_wait_enum wait; /**< Wait mode. */
 	unsigned wait_error; /**< Wait try with error. */
 	target_clock_t wait_last; /**< Last vsync. */
+
+	#ifdef USE_SMP
+		pthread_t thread; /**< Main thread for renderer and texture */
+	#endif
 
 } fb_internal;
 
@@ -1596,11 +1612,15 @@ adv_error fb_mode_set(const fb_video_mode* mode)
 		goto err_restore;
 	}
 
-	fb_state.wait_last = 0;
+	fb_state.wait_last = target_clock();
 	fb_state.wait = fb_wait_detect; /* reset the wait mode */
 	fb_state.wait_error = 0;
 
 	fb_state.mode_active = 1;
+
+#ifdef USE_SMP
+		fb_state.thread = pthread_self();
+#endif
 
 	return 0;
 
@@ -1795,7 +1815,7 @@ static adv_error fb_wait_vsync_vga(void)
 		++counter;
 	}
 
-	fb_state.wait_last = target_clock();
+	fb_state. = target_clock();
 
 	return 0;
 }
@@ -1803,6 +1823,12 @@ static adv_error fb_wait_vsync_vga(void)
 
 void fb_wait_vsync(void)
 {
+	/*target_clock_t delay = target_clock() - fb_state.wait_last;
+	log_std(("fb_wait_vsync:delay: \n"));
+	if (delay < TARGET_FRAME_PER_SEC_START) {
+		usleep(TARGET_FRAME_PER_SEC_START-delay);
+	}*/
+
 	switch (fb_state.wait) {
 	case fb_wait_ext:
 		if (fb_wait_vsync_ext() != 0) {
@@ -1860,6 +1886,11 @@ adv_error fb_scroll(unsigned offset, adv_bool waitvsync)
 {
 	assert(fb_is_active() && fb_mode_is_active());
 
+#ifdef USE_SMP
+	if (fb_state.thread != pthread_self())
+		return -1;
+#endif
+
 	if (offset != 0) {
 		error_set("Multiple buffer not supported.\n");
 		return -1;
@@ -1867,6 +1898,10 @@ adv_error fb_scroll(unsigned offset, adv_bool waitvsync)
 
 	if (waitvsync)
 		fb_wait_vsync();
+
+	target_clock_t delay = target_clock() - fb_state.wait_last;
+	if (delay < TARGET_FRAME_PER_SEC_START)
+		usleep(TARGET_FRAME_PER_SEC_START-delay);
 
 	return 0;
 }
