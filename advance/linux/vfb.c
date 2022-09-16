@@ -46,6 +46,10 @@
 #define FBIO_WAITFORVSYNC _IOW('F', 0x20, int)
 #endif
 
+#ifndef TARGET_FRAME_PER_SEC
+#define TARGET_FRAME_PER_SEC TARGET_CLOCKS_PER_SEC / 60
+#endif
+
 #ifdef HAVE_SYS_IOCTL_H
 #include <sys/ioctl.h>
 #endif
@@ -1413,7 +1417,7 @@ loop:
 		 * When try to restore the original video mode after a refused one
 		 * it could take up to 8/9 seconds.
 		 */
-		if (now < start + 15 * TARGET_CLOCKS_PER_SEC) {
+		if (now < start + 15 * TARGET_CLOCK_PER_SEC) {
 			++count;
 			goto loop;
 		}
@@ -1716,20 +1720,11 @@ static adv_error fb_wait_vsync_ext(void)
 
 	log_debug(("video:fb: ioctl(FBIO_WAITFORVSYNC)\n"));
 
-#ifdef USE_SMP
-			if (fb_state.thread != pthread_self())
-				return -1;
-#endif
-
 	if (ioctl(fb_state.fd, FBIO_WAITFORVSYNC, 0) != 0) {
 		log_std(("WARNING:video:fb: ioctl(FBIO_WAITFORVSYNC) failed\n"));
 		/* it may be not supported, it isn't an error */
 		return -1;
 	}
-
-	target_clock_t delay = target_clock() - fb_state.wait_last;
-	if (delay < (TARGET_CLOCKS_PER_SEC / 60))
-		return -1;
 
 	return 0;
 }
@@ -1824,6 +1819,17 @@ static adv_error fb_wait_vsync_vga(void)
 
 void fb_wait_vsync(void)
 {
+
+#ifdef USE_SMP
+	if (fb_state.thread != pthread_self())
+		return -1;
+#endif
+
+	target_clock_t wait_sync = (TARGET_FRAME_PER_SEC / 60);
+	target_clock_t delay = target_clock() - fb_state.wait_last;
+	if (delay < wait_sync)
+		return;
+
 	switch (fb_state.wait) {
 	case fb_wait_ext:
 		if (fb_wait_vsync_ext() != 0) {
