@@ -57,6 +57,10 @@
 #include "interface/vmcs_host/vc_tvservice.h"
 #endif
 
+#ifdef USE_SMP
+#include <pthread.h>
+#endif
+
 /***************************************************************************/
 /* State */
 
@@ -105,6 +109,10 @@ typedef struct fb_internal_struct {
 	enum fb_wait_enum wait; /**< Wait mode. */
 	unsigned wait_error; /**< Wait try with error. */
 	target_clock_t wait_last; /**< Last vsync. */
+
+	#ifdef USE_SMP
+		pthread_t thread; /**< Main thread for renderer and texture */
+	#endif
 
 } fb_internal;
 
@@ -1602,6 +1610,10 @@ adv_error fb_mode_set(const fb_video_mode* mode)
 
 	fb_state.mode_active = 1;
 
+#ifdef USE_SMP
+		fb_state.thread = pthread_self();
+#endif
+
 	return 0;
 
 err_restore:
@@ -1704,11 +1716,20 @@ static adv_error fb_wait_vsync_ext(void)
 
 	log_debug(("video:fb: ioctl(FBIO_WAITFORVSYNC)\n"));
 
+#ifdef USE_SMP
+			if (fb_state.thread != pthread_self())
+				return -1;
+#endif
+
 	if (ioctl(fb_state.fd, FBIO_WAITFORVSYNC, 0) != 0) {
 		log_std(("WARNING:video:fb: ioctl(FBIO_WAITFORVSYNC) failed\n"));
 		/* it may be not supported, it isn't an error */
 		return -1;
 	}
+
+	target_clock_t delay = target_clock() - fb_state.wait_last;
+	if (delay < (TARGET_CLOCKS_PER_SEC / 60))
+		return -1;
 
 	return 0;
 }
