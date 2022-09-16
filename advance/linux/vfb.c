@@ -1498,7 +1498,7 @@ adv_error fb_mode_set(const fb_video_mode* mode)
 	fb_state.freq *= fb_state.varinfo.xres + fb_state.varinfo.left_margin + fb_state.varinfo.right_margin + fb_state.varinfo.hsync_len;
 	fb_state.freq *= fb_state.varinfo.yres + fb_state.varinfo.upper_margin + fb_state.varinfo.lower_margin + fb_state.varinfo.vsync_len;
 	if (fb_state.freq != 0) {
-		fb_state.freq = 1000000000000LL / fb_state.freq;
+		fb_state.freq = 10000000000000LL / fb_state.freq;
 	}
 
 	log_std(("video:fb: frequency %g\n", fb_state.freq));
