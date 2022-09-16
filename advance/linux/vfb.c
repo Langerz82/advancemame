@@ -1703,7 +1703,7 @@ static adv_error fb_wait_vsync_ext(void)
 	assert(fb_is_active() && fb_mode_is_active());
 
 	log_debug(("video:fb: ioctl(FBIO_WAITFORVSYNC)\n"));
-
+	usleep(16);
 	if (ioctl(fb_state.fd, FBIO_WAITFORVSYNC, 0) != 0) {
 		log_std(("WARNING:video:fb: ioctl(FBIO_WAITFORVSYNC) failed\n"));
 		/* it may be not supported, it isn't an error */
