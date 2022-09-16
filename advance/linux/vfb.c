@@ -1710,6 +1710,10 @@ static adv_error fb_wait_vsync_ext(void)
 		return -1;
 	}
 
+	target_clock_t delay = target_clock() - fb_state.wait_last;
+	if (delay < (TARGET_CLOCKS_PER_SEC / 60))
+		return -1;
+	
 	return 0;
 }
 
