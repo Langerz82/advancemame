@@ -57,6 +57,10 @@
 #include "interface/vmcs_host/vc_tvservice.h"
 #endif
 
+#ifdef USE_SMP
+#include <pthread.h>
+#endif
+
 /***************************************************************************/
 /* State */
 
@@ -105,6 +109,10 @@ typedef struct fb_internal_struct {
 	enum fb_wait_enum wait; /**< Wait mode. */
 	unsigned wait_error; /**< Wait try with error. */
 	target_clock_t wait_last; /**< Last vsync. */
+
+	#ifdef USE_SMP
+		pthread_t thread; /**< Main thread for renderer and texture */
+	#endif
 
 } fb_internal;
 
@@ -1602,6 +1610,10 @@ adv_error fb_mode_set(const fb_video_mode* mode)
 
 	fb_state.mode_active = 1;
 
+#ifdef USE_SMP
+		fb_state.thread = pthread_self();
+#endif
+
 	return 0;
 
 err_restore:
@@ -1803,6 +1815,17 @@ static adv_error fb_wait_vsync_vga(void)
 
 void fb_wait_vsync(void)
 {
+
+	#ifdef USE_SMP
+		if (fb_state.thread != pthread_self())
+			return -1;
+	#endif
+
+	target_clock_t threshold = TARGET_CLOCKS_PER_SEC / fb_state.varinfo.vsync_len;
+	target_clock_t delay = target_clock() - fb_state.wait_last;
+	if (delay > threshold)
+		return;
+
 	switch (fb_state.wait) {
 	case fb_wait_ext:
 		if (fb_wait_vsync_ext() != 0) {
@@ -1924,6 +1947,7 @@ adv_error fb_mode_import(adv_mode* mode, const fb_video_mode* fb_mode)
 	mode->size_x = DRIVER(mode)->crtc.hde;
 	mode->size_y = DRIVER(mode)->crtc.vde;
 	mode->vclock = crtc_vclock_get(&DRIVER(mode)->crtc);
+	crtc_vclock_set(&DRIVER(mode)->crtc, mode->vclock);
 	mode->hclock = crtc_hclock_get(&DRIVER(mode)->crtc);
 	mode->scan = crtc_scan_get(&DRIVER(mode)->crtc);
 
@@ -1998,7 +2022,10 @@ adv_error fb_mode_generate(fb_video_mode* mode, const adv_crtc* crtc, unsigned f
 				return -1;
 			}
 		}
+		
 	}
+
+	crtc_vclock_set(crtc, mode->vclock);
 
 	mode->crtc = *crtc;
 	mode->index = flags & MODE_FLAGS_INDEX_MASK;
@@ -2053,6 +2080,10 @@ void fb_crtc_container_insert_default(adv_crtc_container* cc)
 	log_std(("video:fb: fb_crtc_container_insert_default()\n"));
 
 	/* no default mode because or we are fullscreen programmable, or overlay with generated */
+	adv_crtc crtc;
+	crtc_container_insert(cc, &crtc);
+	
+
 }
 
 /***************************************************************************/
