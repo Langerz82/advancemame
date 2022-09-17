@@ -46,6 +46,10 @@
 #define FBIO_WAITFORVSYNC _IOW('F', 0x20, int)
 #endif
 
+#ifndef TARGET_FRAME_PER_SEC_60
+#define TARGET_FRAME_PER_SEC_60 TARGET_CLOCKS_PER_SEC / 60
+#endif
+
 #ifdef HAVE_SYS_IOCTL_H
 #include <sys/ioctl.h>
 #endif
@@ -55,6 +59,10 @@
 
 #ifdef USE_VC
 #include "interface/vmcs_host/vc_tvservice.h"
+#endif
+
+#ifdef USE_SMP
+#include <pthread.h>
 #endif
 
 /***************************************************************************/
@@ -105,6 +113,10 @@ typedef struct fb_internal_struct {
 	enum fb_wait_enum wait; /**< Wait mode. */
 	unsigned wait_error; /**< Wait try with error. */
 	target_clock_t wait_last; /**< Last vsync. */
+
+	#ifdef USE_SMP
+		pthread_t thread; /**< Main thread for renderer and texture */
+	#endif
 
 } fb_internal;
 
@@ -1602,6 +1614,10 @@ adv_error fb_mode_set(const fb_video_mode* mode)
 
 	fb_state.mode_active = 1;
 
+#ifdef USE_SMP
+		fb_state.thread = pthread_self();
+#endif
+
 	return 0;
 
 err_restore:
@@ -1766,7 +1782,7 @@ static adv_error fb_wait_vsync_api(void)
  * Upper loop limit for the vsync wait.
  * Any port read take approximatively 0.5 - 1.5us.
  */
-#define VSYNC_LIMIT 100000
+#define VSYNC_LIMIT 1000
 
 /**
  * Wait a vsync using the VGA registers.
@@ -1795,6 +1811,10 @@ static adv_error fb_wait_vsync_vga(void)
 		++counter;
 	}
 
+	//delay = target_clock() - fb_state.wait_last;
+	//if (delay < TARGET_FRAME_PER_SEC_30)
+		//usleep(TARGET_FRAME_PER_SEC_30-delay);
+
 	fb_state.wait_last = target_clock();
 
 	return 0;
@@ -1803,6 +1823,16 @@ static adv_error fb_wait_vsync_vga(void)
 
 void fb_wait_vsync(void)
 {
+	
+	#ifdef USE_SMP
+		if (fb_state.thread != pthread_self())
+			return -1;
+	#endif
+	
+	target_clock_t delay = target_clock() - fb_state.wait_last;
+	if (delay > TARGET_FRAME_PER_SEC_60)
+		return;
+
 	switch (fb_state.wait) {
 	case fb_wait_ext:
 		if (fb_wait_vsync_ext() != 0) {
