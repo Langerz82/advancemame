@@ -57,6 +57,10 @@
 #include "interface/vmcs_host/vc_tvservice.h"
 #endif
 
+#ifdef USE_SMP
+#include <pthread.h>
+#endif
+
 /***************************************************************************/
 /* State */
 
@@ -105,6 +109,10 @@ typedef struct fb_internal_struct {
 	enum fb_wait_enum wait; /**< Wait mode. */
 	unsigned wait_error; /**< Wait try with error. */
 	target_clock_t wait_last; /**< Last vsync. */
+
+	#ifdef USE_SMP
+		pthread_t thread; /**< Main thread for renderer and texture */
+	#endif
 
 } fb_internal;
 
@@ -299,10 +307,22 @@ static void fb_preset(struct fb_var_screeninfo* var, unsigned pixelclock, unsign
 	var->height = 0;
 	var->width = 0;
 	var->accel_flags = FB_ACCEL_NONE;
+
+	double factor = 1;
+	if (interlace)
+		factor /= 2;
+	if (doublescan)
+		factor *= 2;
+	unsigned pixelclock60 = 60 * ht * vt * factor;
+
 	if (pixelclock)
 		var->pixclock = (unsigned)(1000000000000LL / pixelclock);
 	else
 		var->pixclock = 0;
+
+	//if (pixelclock < pixelclock60)
+		//var->pixclock = (unsigned)(1000000000000LL / pixelclock60);
+
 	var->left_margin = ht - hre;
 	var->right_margin = hrs - hde;
 	var->upper_margin = vt - vre;
@@ -1602,6 +1622,10 @@ adv_error fb_mode_set(const fb_video_mode* mode)
 
 	fb_state.mode_active = 1;
 
+#ifdef USE_SMP
+		fb_state.thread = pthread_self();
+#endif
+
 	return 0;
 
 err_restore:
@@ -1702,6 +1726,7 @@ static adv_error fb_wait_vsync_ext(void)
 {
 	assert(fb_is_active() && fb_mode_is_active());
 
+
 	log_debug(("video:fb: ioctl(FBIO_WAITFORVSYNC)\n"));
 
 	if (ioctl(fb_state.fd, FBIO_WAITFORVSYNC, 0) != 0) {
@@ -1795,7 +1820,12 @@ static adv_error fb_wait_vsync_vga(void)
 		++counter;
 	}
 
+#ifdef USE_SMP
+	if (fb_state.thread != pthread_self())
+		fb_state.wait_last = target_clock();
+#else
 	fb_state.wait_last = target_clock();
+#endif
 
 	return 0;
 }
@@ -1803,6 +1833,23 @@ static adv_error fb_wait_vsync_vga(void)
 
 void fb_wait_vsync(void)
 {
+
+	#ifdef USE_SMP
+		//return;
+		if (fb_state.thread != pthread_self())
+			return -1;
+	#endif
+
+	target_clock_t threshold = TARGET_CLOCKS_PER_SEC / fb_state.varinfo.vsync_len;
+	if (fb_state.varinfo.v_mode & FB_VMODE_INTERLACED)
+		threshold /= 2;
+	if (fb_state.varinfo.v_mode & FB_VMODE_DOUBLE)
+		threshold *= 2;
+
+	target_clock_t delay = target_clock() - fb_state.wait_last;
+	if (delay > threshold)
+		return;
+
 	switch (fb_state.wait) {
 	case fb_wait_ext:
 		if (fb_wait_vsync_ext() != 0) {
