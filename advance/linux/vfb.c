@@ -57,6 +57,10 @@
 #include "interface/vmcs_host/vc_tvservice.h"
 #endif
 
+#ifdef USE_SMP
+#include <pthread.h>
+#endif
+
 /***************************************************************************/
 /* State */
 
@@ -105,6 +109,12 @@ typedef struct fb_internal_struct {
 	enum fb_wait_enum wait; /**< Wait mode. */
 	unsigned wait_error; /**< Wait try with error. */
 	target_clock_t wait_last; /**< Last vsync. */
+	double vsync;
+	unsigned vsync_threshold;
+
+	#ifdef USE_SMP
+		pthread_t thread; /**< Main thread for renderer and texture */
+	#endif
 
 } fb_internal;
 
@@ -239,6 +249,13 @@ static void fb_log(struct fb_fix_screeninfo* fix, struct fb_var_screeninfo* var)
 static void fb_preset(struct fb_var_screeninfo* var, unsigned pixelclock, unsigned hde, unsigned hrs, unsigned hre, unsigned ht, unsigned vde, unsigned vrs, unsigned vre, unsigned vt, adv_bool doublescan, adv_bool interlace, adv_bool nhsync, adv_bool nvsync, unsigned index, unsigned activate)
 {
 	memset(var, 0, sizeof(struct fb_var_screeninfo));
+
+	double vclock = (double)pixelclock / (ht * vt);
+	if (interlace)
+		vclock /= 2;
+	if (doublescan)
+		vclock *= 2;
+	fb_state.vsync = vclock;
 
 	var->xres = hde;
 	var->yres = vde;
@@ -1596,11 +1613,24 @@ adv_error fb_mode_set(const fb_video_mode* mode)
 		goto err_restore;
 	}
 
-	fb_state.wait_last = 0;
+	fb_state.wait_last = target_clock();
 	fb_state.wait = fb_wait_detect; /* reset the wait mode */
 	fb_state.wait_error = 0;
+	fb_state.vsync = 0;
+	
+	unsigned threshold = (unsigned)(1000000000000LL / fb_state.vsync);
+	if (fb_state.varinfo.vmode & FB_VMODE_INTERLACED)
+		threshold /= 2;
+	if (fb_state.varinfo.vmode & FB_VMODE_DOUBLE)
+		threshold *= 2;
+	fb_state.vsync_threshold = threshold;
+	log_std(("fb_wait_vsync: threshold:%d\n", threshold));
 
 	fb_state.mode_active = 1;
+
+#ifdef USE_SMP
+		fb_state.thread = pthread_self();
+#endif
 
 	return 0;
 
@@ -1648,7 +1678,13 @@ void fb_mode_done(adv_bool restore)
 		/* ignore error */
 	}
 
+#ifdef USE_SMP
+	if (fb_state.thread == pthread_self())
+		fb_state.mode_active = 0;
+#else
 	fb_state.mode_active = 0;
+#endif
+	
 }
 
 unsigned fb_virtual_x(void)
@@ -1803,6 +1839,12 @@ static adv_error fb_wait_vsync_vga(void)
 
 void fb_wait_vsync(void)
 {
+
+#ifdef USE_SMP
+	if (fb_state.thread != pthread_self())
+		return -1;
+#endif
+
 	switch (fb_state.wait) {
 	case fb_wait_ext:
 		if (fb_wait_vsync_ext() != 0) {
@@ -1853,6 +1895,15 @@ void fb_wait_vsync(void)
 		break;
 	default:
 		break;
+	}
+
+	log_std(("fb_wait_vsync: fb_state.wait_error:%d==0 && fb_state.wait:%d==1\n", fb_state.wait_error, fb_state.wait));
+	if (fb_state.wait_error==0 && fb_state.wait == fb_wait_none)
+	{		
+		target_clock_t delay = target_clock() - fb_state.wait_last;
+		log_std(("fb_wait_vsync: delay:%d < vsync_threshold:%d\n", delay, fb_state.vsync_threshold));
+		if (delay < fb_state.vsync_threshold)
+			usleep(fb_state.vsync_threshold - delay);
 	}
 }
 
